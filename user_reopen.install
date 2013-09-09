@@ -1,0 +1,11 @@
+<?php
+
+/**
+ * Implements hook_install().
+ */
+
+function user_reopen_install() {
+
+
+}
+

@@ -1,0 +1,539 @@
+<?php
+/**
+ * @file
+ *
+ */
+
+/**
+ * Implements hook_permission().
+ */
+function user_reopen_permission() {
+  return array(
+    'access user banned field' => array(
+      'title' => t('Access user banned field'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_access().
+ */
+function user_reopen_field_access($op, $field, $entity_type, $entity, $account) {
+
+  switch ($field['field_name']) {
+    case 'field_user_banned':
+      if (user_access('access user banned field')) {
+        return TRUE;
+      }
+      else {
+        return FALSE;
+      }
+      break;
+  }
+}
+
+/**
+ * Implements hook_enable().
+ */
+function user_reopen_enable() {
+
+  // Check if our field is not already created.
+  if (!field_info_field('field_user_banned')) {
+    $field = array(
+      'field_name' => 'field_user_banned',
+      'type' => 'list_boolean',
+      'settings' => array(
+        'allowed_values' => array(
+          'No',
+          'Yes',
+        ),
+        'allowed_values_function' => '',
+      ),
+
+    );
+
+    field_create_field($field);
+
+    // Create the instance on the bundle.
+    $instance = array(
+      'field_name' => 'field_user_banned',
+      'entity_type' => 'user',
+      'module' => 'list',
+      'active' => '1',
+      'cardinality' => '1',
+      'label' => 'User banned?',
+      'bundle' => 'user',
+      'required' => FALSE,
+      'default_value' => array(array('value' => 0)),
+      'widget' => array(
+        'type' => 'textfield',
+      ),
+    );
+
+    field_create_instance($instance);
+  }
+
+}
+
+/**
+ * Implements hook_menu().
+ */
+function user_reopen_menu() {
+
+  $items['user/reopen'] = array(
+    'title' => 'Reopen user account',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('user_reopen'),
+    'access callback' => TRUE,
+    'type' => MENU_CONTEXT_INLINE,
+  );
+
+  $items['user/reopen/%/%/%'] = array(
+    'title' => 'Reopen account confirm',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('user_reopen_confirm', 2, 3, 4),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+
+}
+
+/**
+ * Form builder; Request to reopen user account.
+ */
+function user_reopen() {
+
+  global $user;
+
+  $form['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Username or e-mail address'),
+    '#size' => 60,
+    '#maxlength' => max(USERNAME_MAX_LENGTH, EMAIL_MAX_LENGTH),
+    '#required' => TRUE,
+  );
+
+  // Allow logged in users to request this also.
+  if ($user->uid > 0) {
+    $form['name']['#type'] = 'value';
+    $form['name']['#value'] = $user->mail;
+    $form['mail'] = array(
+      '#prefix' => '<p>',
+      '#markup' => t('Password reset instructions will be mailed to %email. You must log out to use the password reset link in the e-mail.', array('%email' => $user->mail)),
+      '#suffix' => '</p>',
+    );
+  }
+  $form['actions'] = array('#type' => 'actions');
+  $form['actions']['submit'] = array('#type' => 'submit', '#value' => t('Reopen Account'));
+
+  return $form;
+}
+
+/**
+ * Custom validation handler to be added to user_profile_form.
+ *
+ * if user_banned is checked, makes sure that account is also blocked.
+ */
+function user_reopen_user_profile_form_validation($form, &$form_state) {
+
+  if (isset($form_state["input"]["field_user_banned"]) && ($form_state["input"]["field_user_banned"]["und"] == 1)) {
+
+    // Syncing user_banned and core user_status fields.
+    $form_state["values"]["status"] = 0;
+
+  }
+
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function user_reopen_form_alter(&$form, &$form_state, $form_id) {
+
+  if (($form_id === 'user_register_form') || ($form_id === 'user_profile_form')) {
+
+    // Add custom validation handler.
+    array_unshift($form['#validate'], 'user_reopen_user_profile_form_validation');
+  }
+
+  if ($form_id == 'user_admin_settings') {
+
+    // Add reopen confirmation email to admin settings.
+    $form['email_reopen_confirm'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('User reopen confirm'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#description' => t('Edit the e-mail messages sent to users who request to reopen their account. The list of available tokens that can be used in e-mails is provided below.'),
+      '#group' => 'email',
+      '#weight' => 12,
+    );
+    $form['email_reopen_confirm']['user_reopen_confirm_subject'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Subject'),
+      '#default_value' => _user_reopen_mail_text('user_reopen_confirm_subject', NULL, array(), FALSE),
+      '#maxlength' => 180,
+    );
+    $form['email_reopen_confirm']['user_reopen_confirm_body'] = array(
+      '#type' => 'textarea',
+      '#title' => t('Body'),
+      '#default_value' => _user_reopen_mail_text('user_reopen_confirm_body', NULL, array(), FALSE),
+      '#rows' => 12,
+    );
+  }
+}
+
+/**
+ * Returns a mail string for a variable name.
+ *
+ * Used by user_mail() and the settings forms to retrieve strings.
+ */
+function _user_reopen_mail_text($key, $language = NULL, $variables = array(), $replace = TRUE) {
+
+  $langcode = isset($language) ? $language->language : NULL;
+  $text = "";
+
+  if ($admin_setting = variable_get($key, FALSE)) {
+    // An admin setting overrides the default string.
+    $text = $admin_setting;
+  }
+  else {
+    // No override, return default string.
+    switch ($key) {
+
+      case 'user_reopen_mail_subject':
+        $text = t('Account reopen request for [user:name] at [site:name]', array(), array('langcode' => $langcode));
+        break;
+
+      case 'user_reopen_mail_body':
+        $text = t("[user:name],
+
+A request to reopen your account has been made at [site:name].
+
+You may now reopen your account on [site:url-brief] by clicking this link or copying and pasting it into your browser:
+
+[user:reopen-url]
+
+This link expires in one day and nothing will happen if it is not used.
+
+--  [site:name] team", array(), array('langcode' => $langcode));
+
+        break;
+
+    }
+  }
+
+  if ($replace) {
+    // We do not sanitize the token replacement, since the output of this
+    // replacement is intended for an e-mail message, not a web browser.
+    return token_replace($text, $variables, array('language' => $language, 'callback' => 'user_mail_tokens', 'sanitize' => FALSE, 'clear' => TRUE));
+  }
+  return $text;
+
+}
+
+/**
+ * Process variables for user-profile.tpl.php.
+ */
+function user_reopen_form_user_pass_alter(&$form, &$form_state) {
+
+  // Add your own function to the array of validation callbacks.
+  $form['#validate'] = array('user_reopen_validate_user_pass');
+
+}
+
+/**
+ * Process variables for user-profile.tpl.php.
+ */
+function user_reopen_check_user_banned($account) {
+
+  return $account->field_user_banned["und"][0]["value"];
+
+}
+
+/**
+ * Form alter replacement for validate user_pass form.
+ */
+function user_reopen_validate_user_pass(&$form, &$form_state) {
+
+  $name = trim($form_state['values']['name']);
+
+  // Try to load by email.
+  $users = user_load_multiple(array(), array('mail' => $name, 'status' => '1'));
+  $account = reset($users);
+
+  if (!$account) {
+    // No success, try to load by name.
+    $users = user_load_multiple(array(), array('name' => $name, 'status' => '1'));
+    $account = reset($users);
+  }
+
+  if (isset($account->uid)) {
+    // Their account exists and is active, send them their password.
+    form_set_value(array('#parents' => array('account')), $account, $form_state);
+  }
+  else {
+
+    // Repeat same operations above, this time while checking for status = 0.
+    $users = user_load_multiple(array(), array('mail' => $name, 'status' => '0'));
+    $account = reset($users);
+
+    if (!$account) {
+      // No success, try to load by name.
+      $users = user_load_multiple(array(), array('name' => $name, 'status' => '0'));
+      $account = reset($users);
+    }
+
+    // If found then the user account has been closed and we just need to check the banned status.
+    if (isset($account->uid)) {
+
+      if (user_reopen_check_user_banned($account)) {
+        // User banned, block.
+        form_set_error('name', t('This account is currently closed and is ineligible for reactivation.'));
+      }
+      else {
+        // Send user to reopen form instead.
+        drupal_set_message(t('This account is currently closed but can be reopened below.'));
+        drupal_goto("user/reopen");
+      }
+    }
+    else {
+      // Account is truly unknown, block.
+      form_set_error('name', t('Sorry, %name is not recognized as a user name or an e-mail address.', array('%name' => $name)));
+    }
+  }
+}
+
+/**
+ * Validate input from user/reopen form.
+ */
+function user_reopen_validate(&$form, &$form_state) {
+
+  $name = trim($form_state['values']['name']);
+
+  // Try to load by email.
+  $users = user_load_multiple(array(), array('mail' => $name, 'status' => '1'));
+  $account = reset($users);
+
+  if (!$account) {
+
+    // No success, try to load by name.
+    $users = user_load_multiple(array(), array('name' => $name, 'status' => '1'));
+    $account = reset($users);
+
+  }
+
+  if (isset($account->uid)) {
+    // They are trying to reopen an account that is already open. block.
+    form_set_error('name', t('This account is already active and is ineligible for reactivation.'));
+  }
+  else {
+
+    // Repeat same operations above, this time while checking for status = 0.
+    $users = user_load_multiple(array(), array('mail' => $name, 'status' => '0'));
+    $account = reset($users);
+
+    if (!$account) {
+      // No success, try to load by name.
+      $users = user_load_multiple(array(), array('name' => $name, 'status' => '0'));
+      $account = reset($users);
+    }
+
+    // If found then the user account has been closed and we just need to check
+    // the banned status.
+    if (isset($account->uid)) {
+
+      if (user_reopen_check_user_banned($account)) {
+        // User is banned, block.
+        form_set_error('name', t('This account is currently closed and is ineligible for reactivation.'));
+      }
+      else {
+
+        // We've found their account, they are currently inactive but 
+        // can be reopened, let's do this.
+        form_set_value(array('#parents' => array('account')), $account, $form_state);
+      }
+    }
+    else {
+
+      // Account is truly unknown, block.
+      form_set_error('name', t('Sorry, %name is not recognized as a user name or an e-mail address.', array('%name' => $name)));
+    }
+  }
+}
+
+/**
+ * Process output from user_reopen form, send reopen confirmation email.
+ */
+function user_reopen_submit($form, &$form_state) {
+
+  global $language;
+
+  $account = $form_state['values']['account'];
+
+  $params['account'] = $account;
+  $language = $language ? $language : user_preferred_language($account);
+  $mail = drupal_mail('user_reopen', 'confirm_reopen', $account->mail, $language, $params);
+
+  if (!empty($mail)) {
+    watchdog('user', 'Account reopen confirmation instructions mailed to %name at %email.', array('%name' => $account->name, '%email' => $account->mail));
+    drupal_set_message(t('Further instructions have been sent to your e-mail address.'));
+  }
+
+  $form_state['redirect'] = 'user';
+}
+
+/**
+ * Implements hook_mail().
+ *
+ * @see _user_reopen_mail_text()
+ */
+function user_reopen_mail($key, &$message, $params) {
+
+  $variables = array('user' => $params['account']);
+  $language = $message['language'];
+  switch ($key) {
+    case 'confirm_reopen':
+      $message['subject'] = _user_reopen_mail_text("user_reopen_mail_subject", $language = NULL, $variables, $replace = TRUE);
+      $message['body'][] = _user_reopen_mail_text("user_reopen_mail_body", $language = NULL, $variables, $replace = TRUE);
+      break;
+  }
+}
+
+/**
+ * Generates a URL to confirm an account reopening request.
+ */
+function user_reopen_confirm_url($account) {
+  $timestamp = REQUEST_TIME;
+  return url("user/reopen/$account->uid/$timestamp/" . user_pass_rehash($account->pass, $timestamp, $account->login), array('absolute' => TRUE));
+}
+
+/**
+ * Implements hook_token_info().
+ */
+function user_reopen_token_info() {
+
+  $info = array();
+
+  $info['tokens']['user']['reopen-url'] = array(
+    'name' => t("Confirmation URL to be used for re-opening account"),
+    'description' => t("Secure one-time url for confirming re-opening account."),
+  );
+  return $info;
+}
+
+/**
+ * Implements hook_tokens().
+ */
+function user_reopen_tokens($type, $tokens, array $data = array(), array $options = array()) {
+
+  $replacements = array();
+
+  if ($type == 'user') {
+    $account = $data['user'];
+
+    foreach ($tokens as $name => $original) {
+      switch ($name) {
+        case 'reopen-url':
+          $new = user_reopen_confirm_url($account);
+          $replacements[$original] = $new;
+          break;
+      }
+    }
+  }
+
+  // Return the replacements.
+  return $replacements;
+}
+
+/**
+ * Menu callback; process user reopen login link and redirects to 
+ * the user page on success.
+ *
+ * @see user_pass_reset()
+ */
+function user_reopen_confirm($form, &$form_state, $uid, $timestamp, $hashed_pass, $action = NULL) {
+  global $user;
+
+  // When processing the one-time login link, we have to make sure that a user
+  // isn't already logged in.
+  if ($user->uid) {
+    // The existing user is already logged in.
+    if ($user->uid == $uid) {
+      drupal_set_message(t('You are logged in as %user. <a href="!user_edit">Change your password.</a>', array('%user' => $user->name, '!user_edit' => url("user/$user->uid/edit"))));
+    }
+    // A different user is already logged in on the computer.
+    else {
+      $reset_link_account = user_load($uid);
+      if (!empty($reset_link_account)) {
+        drupal_set_message(t('Another user (%other_user) is already logged into the site on this computer, but you tried to use a one-time link for user %resetting_user. Please <a href="!logout">logout</a> and try using the link again.',
+          array('%other_user' => $user->name, '%resetting_user' => $reset_link_account->name, '!logout' => url('user/logout'))));
+      }
+      else {
+        // Invalid one-time link specifies an unknown user.
+        drupal_set_message(t('The one-time login link you clicked is invalid.'));
+      }
+    }
+    drupal_goto();
+  }
+  else {
+    // Time out, in seconds, until login URL expires. Defaults to 24 hours =
+    // 86400 seconds.
+    $timeout = variable_get('user_password_reset_timeout', 86400);
+    $current = REQUEST_TIME;
+    // Some redundant checks for extra security ?
+    $users = user_load_multiple(array($uid), array('status' => '0'));
+    if ($timestamp <= $current && $account = reset($users)) {
+      // No time out for first time login.
+      if ($account->login && $current - $timestamp > $timeout) {
+        drupal_set_message(t('You have tried to use a user reactivation link that has expired. Please request a new one using the form below.'));
+        drupal_goto('user/reopen');
+      }
+      elseif ($account->uid && $timestamp >= $account->login && $timestamp <= $current && $hashed_pass == user_pass_rehash($account->pass, $timestamp, $account->login)) {
+        // First stage is a confirmation form, then login.
+        if ($action == 'login') {
+          watchdog('user', 'User %name used user reactivation link at time %timestamp.', array('%name' => $account->name, '%timestamp' => $timestamp));
+          // Set the new user.
+          $user = $account;
+
+          // Big moment - now that we're all clear, set the user status to 1 and 
+          // 'reopen' the account. We're using a simple db_query operation here 
+          // rather than user_save to avoid triggering _user_mail_notify().
+
+          $payload = db_update('users') 
+          ->fields(array(
+            'uid' => $user->uid,
+            'status' => 1,
+          ))
+	      ->condition('uid', $user->uid, '=')
+          ->execute();
+
+          user_login_finalize();
+          drupal_set_message(t('You have just used reopened your account, welcome back! You can update your account information or password below.'));
+          // Let the user's password be changed without the current password check.
+          $token = drupal_hash_base64(drupal_random_bytes(55));
+          $_SESSION['pass_reset_' . $user->uid] = $token;
+          drupal_goto('user/' . $user->uid . '/edit', array('query' => array('pass-reset-token' => $token)));
+        }
+        else {
+          $form['message'] = array('#markup' => t('<p>This is a one-time user reactivation login for %user_name and will expire on %expiration_date.</p><p>Click on this button to reopen your account and log in to the site.</p>', array('%user_name' => $account->name, '%expiration_date' => format_date($timestamp + $timeout))));
+          $form['help'] = array('#markup' => '<p>' . t('This link can be used only once.') . '</p>');
+          $form['actions'] = array('#type' => 'actions');
+          $form['actions']['submit'] = array('#type' => 'submit', '#value' => t('Reopen account'));
+          $form['#action'] = url("user/reopen/$uid/$timestamp/$hashed_pass/login");
+          return $form;
+        }
+      }
+      else {
+        drupal_set_message(t('You have tried to use a user reactivation link that has either been used or is no longer valid. Please request a new one using the form below.'));
+        drupal_goto('user/reopen');
+      }
+    }
+    else {
+      // Deny access, no more clues.
+      drupal_access_denied();
+    }
+  }
+}
