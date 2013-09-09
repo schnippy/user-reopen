@@ -1,7 +1,7 @@
 name = User Reopen
 description = Updates user registration flow to allow users to reopen own accounts, as long as admin hasn't banned them
 core = 7.x
-version = 7.x-1.0-alpha1
+version = 7.x-1.0-alpha2
 project = user_reopen
 
 # Dependencies
